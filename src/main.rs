@@ -13,11 +13,10 @@ struct Message {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Body {
-    #[serde(rename = "type")]
-    ty: String,
     #[serde(rename = "msg_id")]
     id: Option<usize>,
     in_reply_to: Option<usize>,
+    #[serde(flatten)]
     payload: Payload,
 }
 
@@ -27,7 +26,8 @@ struct Body {
 enum Payload {
     Echo { echo: String },
     EchoOk { echo: String },
-    InitOk{ node_id: String , node_ids:Vec<String>},
+    Init{ node_id: String , node_ids:Vec<String>},
+    InitOk,
 }
 
 struct EchoNode {
@@ -35,31 +35,34 @@ struct EchoNode {
 }
 
 impl EchoNode {
-    pub fn handle(
-        &mut self,
-        input: Message,
-        output: &mut serde_json::Serializer<StdoutLock>,
-        ) -> anyhow::Result<()> {
-            match input.body.payload {
-                Payload::Echo { echo } => {
-                    let reply = Message {
-                        src: input.dst,
-                        dst: input.src,
-                        body: Body {
-                            id: Some(self.id),
-                            in_reply_to: input.body.id,
-                            ty: "reply".to_string(),
-                            payload: Payload::EchoOk { echo },
-                        },
-                    };
-                    serde_json::to_writer(&mut *output, &reply).context("Serialize response to init")?;
-                    output.write_all(b"\n").context("write trailing newline")?;
-                    self.id += 1;
-                }
-                
-                Payload::EchoOk { .. } => {},
-
-                Payload::InitOk{..} => bail!("received init ok message")
+    pub fn step(&mut self, input :Message, output: &mut StdoutLock) -> anyhow::Result<()> {
+        match input.body.payload {
+            Payload::Init { node_id, node_ids } => {
+                let reply = Message {
+                    src: input.dst,
+                    dst: input.src,
+                    body: Body {
+                        id: Some(self.id),
+                        in_reply_to: input.body.id,
+                        payload: Payload::InitOk,
+                    },
+                };
+            }
+            Payload::Echo { echo } => {
+                let reply = Message {
+                    src: input.dst,
+                    dst: input.src,
+                    body: Body {
+                        id: Some(self.id),
+                        in_reply_to: input.body.id,
+                        payload: Payload::EchoOk { echo },
+                    },
+                };
+            }
+            
+            
+            Payload::InitOk {..}  => bail!("Received InitOk msg"),
+            Payload::EchoOk { echo } => {}
         }
         Ok(())
     }
@@ -72,9 +75,9 @@ fn main() {
     let mut state = EchoNode { id: 0 };
     let mut output = serde_json::Serializer::new(stdout);
     for input in inputs {
-        let input = input.context("Maelstrom input from STDIN could not be deserialized");
+        let input = input.context("Maelstrom input from STDIN could not be deserialized")?;
         state
-        .handle(input, &mut output)
+        .step(input, &mut output)
         .context("Malestorm output to STDOUT could not be serialized");
 
     }
